@@ -1,0 +1,12 @@
+# Ignore node_modules directory
+node_modules/
+
+# Ignore package.json and package-lock.json files
+package.json
+package-lock.json
+
+# Ignore solution.js and index.js files
+solution.js
+
+# Ignore users.txt file
+users.txt
