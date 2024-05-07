@@ -2,6 +2,7 @@ import express from "express";
 import axios from "axios";
 import morgan from "morgan";
 import fs from "fs";
+import csv from "csv-parser";
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -19,7 +20,21 @@ let yourBearerToken = "";
 
 // Register a new user and log them into user.txt
 const result = await registerAndLogUser(yourUsername, yourPassword);
-// Generate an API Key
+// Generate an API Key and update user.csv with new the new key
+generateApiKey()
+  .then((apiKey) => {
+    if (apiKey) {
+      return updateUserAPIKey(yourUsername, apiKey);
+    } else {
+      throw new Error("Failed to generate API key"); // This line only executes if no specific error message is received from the API
+    }
+  })
+  .then(() => {
+    console.log("API Key update successful");
+  })
+  .catch((err) => {
+    console.error("Error updating API Key:", err.message);
+  });
 
 // Generate a Bearer Token
 
@@ -27,11 +42,11 @@ const result = await registerAndLogUser(yourUsername, yourPassword);
 
 // Register a new user
 async function registerUser(username, password) {
-  const url = API_URL + "/register";
-  const body = { username: username, password: password };
-
   try {
-    const response = await axios.post(url, body);
+    const response = await axios.post(API_URL + "/register", {
+      username: username,
+      password: password,
+    });
     const data = response.data;
 
     if (response.status === 200) {
@@ -65,17 +80,29 @@ async function registerAndLogUser(username, password) {
   try {
     // Check if users.txt file exists, create an empty file if it doesn't
     try {
-      fs.accessSync("users.txt", fs.constants.R_OK | fs.constants.W_OK);
+      fs.accessSync("users.csv", fs.constants.R_OK | fs.constants.W_OK);
     } catch (err) {
-      fs.writeFileSync("users.txt", "");
+      fs.writeFileSync("users.csv", "");
     }
 
-    const userExists = await checkUserExists(username);
-    if (userExists) {
-      yourUsername = username;
-      yourPassword = password;
-      return { username, password };
-    }
+    checkUserExists(username)
+      .then((userInfo) => {
+        if (userInfo) {
+          yourUsername = userInfo.username;
+          yourPassword = userInfo.password;
+          yourAPIKey = userInfo.apiKey;
+          yourBearerToken = userInfo.bearerToken;
+          console.log(`Username: ${yourUsername}`);
+          console.log(`Password: ${yourPassword}`);
+          console.log(`API Key: ${yourAPIKey || "N/A"}`);
+          console.log(`Bearer Token: ${yourBearerToken || "N/A"}`);
+        } else {
+          console.log("User not found in local database");
+        }
+      })
+      .catch((err) => {
+        console.error("Error:", err);
+      });
 
     const success = await registerUser(username, password);
     if (success) {
@@ -94,31 +121,40 @@ async function registerAndLogUser(username, password) {
 
 function checkUserExists(username) {
   return new Promise((resolve, reject) => {
-    fs.readFile("users.txt", "utf8", (err, data) => {
-      if (err) {
-        reject(err);
-        return;
-      }
+    const results = [];
 
-      const users = data.split("\n").filter((line) => line.trim() !== "");
-      const userExists = users.some((line) =>
-        line.includes(`Username: ${username}`)
-      );
-
-      if (userExists) {
-        console.log(
-          `User already exists in local database: Username: ${username}`
-        );
-      }
-
-      resolve(userExists);
-    });
+    fs.createReadStream("users.csv")
+      .pipe(csv())
+      .on("data", (data) => results.push(data))
+      .on("end", () => {
+        const userInfo = results.find((user) => user.Username === username);
+        if (userInfo) {
+          console.log(
+            `User found in local database: Username: ${userInfo.Username}`
+          );
+          resolve({
+            username: userInfo.Username,
+            password: userInfo.Password,
+            apiKey: userInfo["API Key"],
+            bearerToken: userInfo["Bearer Token"],
+          });
+        } else {
+          console.log(
+            `User not found in local database for username: ${username}`
+          );
+          resolve(null);
+        }
+      })
+      .on("error", (error) => {
+        console.error("Error reading CSV file:", error);
+        reject(error);
+      });
   });
 }
 
-function saveUserToFile(username, password) {
-  const userData = `Username: ${username}, Password: ${password}\n`;
-  fs.appendFile("users.txt", userData, (err) => {
+function saveUserToFile(username, password, apiKey = "", bearerToken = "") {
+  const userData = `Username: ${username},Password: ${password},API Key: ${apiKey},Bearer Token: ${bearerToken}\n`;
+  fs.appendFile("users.csv", userData, (err) => {
     if (err) {
       console.error("Error writing to file:", err);
     } else {
@@ -129,7 +165,64 @@ function saveUserToFile(username, password) {
   });
 }
 
-/* WEB METHODS */
+// Generate an API Key
+async function generateApiKey() {
+  try {
+    const response = await axios.get(API_URL + "/generate-api-key");
+    const data = response.data;
+
+    if (response.status === 200 && data.apiKey) {
+      console.log(`API key generated: ${data.apiKey}`);
+      return data.apiKey;
+    } else {
+      throw new Error(data.error || "Failed to generate API key");
+    }
+  } catch (error) {
+    console.error("Error:", error.message);
+    return null;
+  }
+}
+
+function updateUserAPIKey(username, newAPIKey) {
+  return new Promise((resolve, reject) => {
+    fs.readFile("users.csv", "utf8", (err, data) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+
+      const lines = data.split("\n");
+      const updatedLines = lines.map((line) => {
+        if (line.trim() === "") {
+          return line;
+        }
+
+        const [csvUsername, password, oldAPIKey, ...rest] = line.split(",");
+        if (csvUsername === username) {
+          const updatedLine = `${csvUsername},${password},${newAPIKey},${rest.join(
+            ","
+          )}`;
+          console.log(`Updated line: ${updatedLine}`);
+          return updatedLine;
+        }
+        return line;
+      });
+
+      const updatedData = updatedLines.join("\n");
+
+      fs.writeFile("users.csv", updatedData, (err) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        console.log(`Updated API Key for user ${username} to ${newAPIKey}`);
+        resolve();
+      });
+    });
+  });
+}
+
+/* ROUTES */
 
 app.get("/", (req, res) => {
   res.render("index.ejs", { content: "API Response." });
