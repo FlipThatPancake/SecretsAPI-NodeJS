@@ -18,6 +18,8 @@ let yourPassword = "testpass";
 let yourAPIKey = "";
 let yourBearerToken = "";
 
+/* FUNCTION CALLS */
+
 // Register a new user and log them into user.txt
 const result = await registerAndLogUser(yourUsername, yourPassword);
 // Generate an API Key and update user.csv with new the new key
@@ -37,6 +39,21 @@ generateApiKey()
   });
 
 // Generate a Bearer Token
+getAuthToken(yourUsername, yourPassword)
+  .then((token) => {
+    if (token) {
+      yourBearerToken = token; // Save the authentication token
+      return updateBearerToken(yourUsername, token); // Update the Bearer token
+    } else {
+      throw new Error("Failed to obtain authentication token");
+    }
+  })
+  .then(() => {
+    console.log("Bearer token updated successfully.");
+  })
+  .catch((error) => {
+    console.error("Error:", error.message);
+  });
 
 /* FUNCTIONS */
 
@@ -217,6 +234,80 @@ function updateUserAPIKey(username, newAPIKey) {
         }
         console.log(`Updated API Key for user ${username} to ${newAPIKey}`);
         resolve();
+      });
+    });
+  });
+}
+
+async function getAuthToken(username, password) {
+  const url = "https://secrets-api.appbrewery.com/get-auth-token";
+  const requestBody = {
+    username: username,
+    password: password,
+  };
+
+  try {
+    const response = await axios.post(url, requestBody);
+
+    if (!response.data.token) {
+      throw new Error("Authentication failed: " + response.data.error);
+    }
+
+    console.log(`Token generated: ${response.data.token}`);
+    return response.data.token;
+  } catch (error) {
+    throw new Error("Error getting authentication token: " + error.message);
+  }
+}
+
+function updateBearerToken(username, newToken) {
+  return new Promise((resolve, reject) => {
+    const tempFilePath = "temp_users.csv"; // Define the path for the temporary CSV file
+
+    fs.readFile("users.csv", "utf8", (err, data) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+
+      const lines = data.split("\n");
+      const updatedLines = lines.map((line) => {
+        if (line.trim() === "") {
+          return line;
+        }
+
+        const [csvUsername, csvPassword, csvApiKey, csvBearerToken, ...rest] =
+          line.split(",");
+        if (csvUsername === username) {
+          const updatedLine = `${csvUsername},${csvPassword},${csvApiKey},${newToken},${rest.join(
+            ","
+          )}`;
+          console.log(`Updated line: ${updatedLine}`);
+          return updatedLine;
+        }
+        return line;
+      });
+
+      const updatedData = updatedLines.join("\n");
+
+      fs.writeFile(tempFilePath, updatedData, (err) => {
+        // Write to the temporary file
+        if (err) {
+          reject(err);
+          return;
+        }
+
+        fs.rename(tempFilePath, "users.csv", (err) => {
+          // Replace the original file with the temporary file
+          if (err) {
+            reject(err);
+            return;
+          }
+          console.log(
+            `Updated Bearer token for user ${username} to ${newToken}`
+          );
+          resolve();
+        });
       });
     });
   });
